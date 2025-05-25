@@ -210,6 +210,15 @@ internal class MixinGenerator : IIncrementalGenerator
                     declaration = declaration.WithExplicitInterfaceSpecifier(explicitSpecifier);
                 }
 
+                // Add generic type parameters if the method is generic
+                if (method.TypeParameters.Length > 0)
+                {
+                    var typeParameterList = SyntaxFactory.SeparatedList(
+                        method.TypeParameters.Select(tp => SyntaxFactory.TypeParameter(tp.Name)));
+                    declaration = declaration.WithTypeParameterList(
+                        SyntaxFactory.TypeParameterList(typeParameterList));
+                }
+
                 // Add parameters
                 foreach (var parameter in method.Parameters)
                 {
@@ -237,24 +246,112 @@ internal class MixinGenerator : IIncrementalGenerator
                                 break;
                         }
 
-                        declaration = declaration.AddModifiers(token);
+                        paramSyntax = paramSyntax.WithModifiers(SyntaxFactory.TokenList(token));
                     }
 
                     declaration = declaration.AddParameterListParameters(paramSyntax);
                 }
 
-                // Add return statement
+                // Add generic type constraints
+                var constraints = new List<TypeParameterConstraintClauseSyntax>();
+                foreach (var typeParam in method.TypeParameters)
+                {
+                    var typeConstraints = new List<TypeParameterConstraintSyntax>();
+                    foreach (var constraintType in typeParam.ConstraintTypes)
+                    {
+                        var typeName = SyntaxFactory.ParseTypeName(constraintType.ToDisplayString());
+                        var tc = SyntaxFactory.TypeConstraint(typeName);
+                        typeConstraints.Add(tc);
+                    }
+
+                    if (typeParam.HasReferenceTypeConstraint)
+                    {
+                        var tc = SyntaxFactory.ClassOrStructConstraint(SyntaxKind.ClassConstraint);
+                        typeConstraints.Add(tc);
+                    }
+
+                    if (typeParam.HasValueTypeConstraint)
+                    {
+                        var tc = SyntaxFactory.ClassOrStructConstraint(SyntaxKind.StructConstraint);
+                        typeConstraints.Add(tc);
+                    }
+
+                    if (typeConstraints.Any())
+                    {
+                        var typeId = SyntaxFactory.IdentifierName(typeParam.Name);
+                        var clause = SyntaxFactory.TypeParameterConstraintClause(
+                            typeId, 
+                            SyntaxFactory.SeparatedList(typeConstraints));
+                        constraints.Add(clause);
+                    }
+                }
+
+                // add constraints with a new line for each
+                if (constraints.Count > 0)
+                {
+                    declaration = declaration.WithConstraintClauses([.. constraints]);
+                }                
+
+                // this.memberToMixin
+                var memberInvocation = SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.ThisExpression(),
+                    SyntaxFactory.IdentifierName(memberToMixin.Name));
+
+                // this.memberToMixin.MethodName
+                memberInvocation = SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    memberInvocation,
+                    SyntaxFactory.IdentifierName(name));
+
+                // Get the arguments
+                var arguments = new List<ArgumentSyntax>();
+                foreach (var parameter in method.Parameters)
+                {
+                    var argument = SyntaxFactory.Argument(SyntaxFactory.IdentifierName(parameter.Name));
+                    
+                    // Add ref or out
+                    if (parameter.RefKind != RefKind.None)
+                    {
+                        var token = SyntaxFactory.Token(SyntaxKind.None);
+                        switch (parameter.RefKind)
+                        {
+                            case RefKind.None:
+                                break;
+                            case RefKind.Ref:
+                                token = SyntaxFactory.Token(SyntaxKind.RefKeyword);
+                                break;
+                            case RefKind.Out:
+                                token = SyntaxFactory.Token(SyntaxKind.OutKeyword);
+                                break;
+                            case RefKind.In:
+                                break;
+                        }
+
+                        argument = argument.WithRefOrOutKeyword(token);
+                    }
+                    
+                    arguments.Add(argument);
+                }
+
+                // this.memberToMixin.MethodName(arg1, arg2, ...)
+                var invocationExpression = SyntaxFactory.InvocationExpression(
+                    memberInvocation,
+                    SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(arguments)));
+                
                 if (method.ReturnsVoid)
                 {
-                    declaration = declaration.WithBody(SyntaxFactory.Block());
+                    // Create an expression statement for the invocation
+                    var expressionStatement = SyntaxFactory.ExpressionStatement(invocationExpression);
+
+                    // Create a block with the expression statement
+                    declaration = declaration.WithBody(SyntaxFactory.Block(expressionStatement));
                 }
                 else
                 {
-                    var returnStatement = SyntaxFactory.ReturnStatement(
-                        SyntaxFactory.MemberAccessExpression(
-                            SyntaxKind.SimpleMemberAccessExpression,
-                            SyntaxFactory.ThisExpression(),
-                            SyntaxFactory.IdentifierName(memberToMixin.Name)));
+                    // return the result of the invocation
+                    var returnStatement = SyntaxFactory.ReturnStatement(invocationExpression);
+
                     declaration = declaration.WithBody(SyntaxFactory.Block(returnStatement));
                 }
                 
@@ -335,6 +432,25 @@ internal class MixinGenerator : IIncrementalGenerator
                 {
                     yield return wrapper;
                 }
+            }
+            else if (member is IMethodSymbol method)
+            {
+                foreach (var wrapper in GenerateWrappers(method, method.ReturnType))
+                {
+                    yield return wrapper;
+                }
+            }
+            else if (member is IEventSymbol eventSymbol)
+            {
+                foreach (var wrapper in GenerateWrappers(eventSymbol, eventSymbol.Type))
+                {
+                    yield return wrapper;
+                }
+            }
+            else
+            {
+                // Unsupported member type, skip it
+                continue;
             }
         }
     }
@@ -461,6 +577,11 @@ internal class MixinGenerator : IIncrementalGenerator
                     var containingType = kvp.Key;
                     var members = kvp.Value;
 
+                    // Add an explicit '#nullable' directive
+                    var nullableDirective = SyntaxFactory.NullableDirectiveTrivia(
+                        SyntaxFactory.Token(SyntaxKind.EnableKeyword),
+                        true);
+
                     // start by declaring the namespace
                     var namepaceDeclaration = SyntaxFactory.NamespaceDeclaration(
                         SyntaxFactory.ParseName(containingType.ContainingNamespace.ToDisplayString()));
@@ -472,6 +593,8 @@ internal class MixinGenerator : IIncrementalGenerator
                     // Add the namespace to the compilation unit
                     var compilationUnit = SyntaxFactory.CompilationUnit()
                         .AddMembers(namepaceDeclaration);
+                    compilationUnit = compilationUnit
+                        .WithLeadingTrivia(SyntaxFactory.Trivia(nullableDirective));
 
                     // generate the source code
                     var sourceText = compilationUnit.NormalizeWhitespace().ToFullString();

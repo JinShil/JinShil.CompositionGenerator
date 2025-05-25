@@ -5,77 +5,82 @@ using Xunit;
 
 namespace JinShil.MixinGenerator.Test;
 
+partial class TestObject
+{
+    [Mixin]
+    readonly FieldsAndMethods _fieldsAndMethods = new();
+}
+
+class Fields
+{
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+
+    public int Age { get; set; }
+}
+
+class FieldsAndMethods : Fields
+{
+    public string? GetFullName()
+    {
+        return FirstName + " " + LastName;
+    }
+
+    public void SetFullName(string firstName, string lastName)
+    {
+        FirstName = firstName;
+        LastName = lastName;
+    }
+
+    public void SetFullNameRef(ref string? firstName, ref string? lastName)
+    {
+        string? oldFirstName = FirstName;
+        string? oldLastName = LastName;
+
+        FirstName = firstName;
+        LastName = lastName;
+
+        firstName = oldFirstName;
+        lastName = oldLastName;
+    }
+
+    public void VoidWithGenericParam(IEnumerable<string> e)
+    { }
+
+    public void VoidGeneric<T1, T2>(T1 arg, T2 arg2)
+        where T2 : IEnumerable<T1>
+        where T1 : class
+    { }
+
+    public T GenericReturn<T>(T arg)
+    {
+        return arg;
+    }
+
+    public void SetFullNameDefaults(string firstName = "FirstName", string lastName = "LastName")
+    {
+        FirstName = firstName;
+        LastName = lastName;
+    }
+
+    public void SetAgeWithDefault(int age = 2)
+    {
+        Age = age;
+    }
+
+    public int GetAge()
+    {
+        return Age;
+    }
+
+    public void VoidVoid()
+    {
+        // This method is intentionally left empty.
+    }
+}
+
 public partial class BasicTest
 {
-    partial class TestObject
-    {
-        [Mixin]
-        readonly FieldsAndMethods _fieldsAndMethods = new();
-    }
-
-    class Fields
-    {
-        public string? FirstName { get; set; }
-        public string? LastName { get; set; }
-
-        public int Age { get; set; }
-    }
-
-    class FieldsAndMethods : Fields
-    {
-        public string? GetFullName()
-        {
-            return FirstName + " " + LastName;
-        }
-
-        public void SetFullName(string firstName, string lastName)
-        {
-            FirstName = firstName;
-            LastName = lastName;
-        }
-
-        public void SetFullNameRef(ref string? firstName, ref string? lastName)
-        {
-            string? oldFirstName = FirstName;
-            string? oldLastName = LastName;
-
-            FirstName = firstName;
-            LastName = lastName;
-
-            firstName = oldFirstName;
-            lastName = oldLastName;
-        }
-
-        public void VoidWithGenericParam(IEnumerable<string> e)
-        { }
-
-        public void VoidGeneric<T1, T2>(T1 arg, T2 arg2)
-            where T2 : IEnumerable<T1>
-            where T1 : class
-        { }
-
-        public T GenericReturn<T>(T arg)
-        {
-            return arg;
-        }
-
-        public void SetFullNameDefaults(string firstName = "FirstName", string lastName = "LastName")
-        {
-            FirstName = firstName;
-            LastName = lastName;
-        }
-
-        public void SetAgeWithDefault(int age = 2)
-        {
-            Age = age;
-        }
-
-        public int GetAge()
-        {
-            return Age;
-        }
-    }
-
     [Fact]
     public void Test()
     {
